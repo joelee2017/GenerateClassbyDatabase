@@ -39,13 +39,11 @@ static string GetConnectionString(string dataBase = "")
 static void Main(string filePath)
 {
     string connectionString = GetConnectionString();
-    // "MID_Dev" 
     //string dataBase = Console.ReadLine(); 
     var results = GetDataBaseList(connectionString);
     string dataBase = CheckDataBase(results);
     var tableList = DataBaseTableListQuery(dataBase);
     Console.Write($"\n請輸入查詢資料表號碼，若有多個請使用逗號串連：");
-    //"SSRSCrontab" 
     string tableNo = Console.ReadLine();
     List<string> tableNames = new List<string>();
     try
