@@ -11,38 +11,75 @@ while (true)
     else
     {
         Console.WriteLine("GenerateClassbyDatabase GO!");
-        string filePath = "E:/Project/GenerateClassbyDatabase/GenerateClassbyDatabase/File/";
-        string connectionString = $"Data Source=you connectionstring";
-        Main(filePath, connectionString);
-        Console.WriteLine("GenerateClassbyDatabase Done!");
+        string filePath = "E:/Project/GenerateClassbyDatabase/GenerateClassbyDatabase/GenerateClassbyDatabase/File/";
+        Main(filePath);
+        Console.WriteLine("GenerateClassbyDatabase done!");
         Console.WriteLine();
     }
 }
-static void Main(string filePath,string connectionString)
-{    
-    Console.WriteLine($"\n請輸入目標資料庫：");
+static List<(int, string)> GetDataBaseList(string connectionString)
+{
+    string dataBaseQuery = "SELECT dbid,name FROM master.dbo.sysdatabases order by dbid";
+    var results = new List<(int, string)>();
+    using (var conn = new SqlConnection(connectionString))
+    {
+        results = conn.Query<(int, string)>(dataBaseQuery).ToList();
+        Console.WriteLine($"\n資料庫清單：\n");
+        foreach (var item in results)
+        {
+            Console.WriteLine($"{item.Item1}：{item.Item2}");
+        }
+    }
+    return results;
+}
+static string GetConnectionString(string dataBase = "")
+{
+    return $"Server=you host port;Database={(!string.IsNullOrEmpty(dataBase) ? dataBase : string.Empty)};User ID=xxxx;Password=xxxx";
+}
+static void Main(string filePath)
+{
+    string connectionString = GetConnectionString();
     // "MID_Dev" 
-    string dataBase = Console.ReadLine();   
-    var tableList = DataBaseTableListQuery(connectionString);
-    string querySchema = GetTableSchemaString();
-    Console.WriteLine($"\n請輸入查詢資料表號碼：");
+    //string dataBase = Console.ReadLine(); 
+    var results = GetDataBaseList(connectionString);
+    string dataBase = CheckDataBase(results);
+    var tableList = DataBaseTableListQuery(dataBase);
+    Console.Write($"\n請輸入查詢資料表號碼，若有多個請使用逗號串連：");
     //"SSRSCrontab" 
     string tableNo = Console.ReadLine();
-    string tableName = string.Empty;
+    List<string> tableNames = new List<string>();
     try
     {
-        tableName = tableList.Select(x => x.Item2).ToArray()[int.Parse(tableNo)];
-        if (!string.IsNullOrEmpty(tableName))
+        if (!string.IsNullOrEmpty(tableNo))
         {
+            if (tableNo.Contains(","))
+            {
+                var tableIndex = tableNo.Replace(" ", "").Split(",").Select(int.Parse);
+                var tableNameArray = tableIndex.Select(i => tableList[i].Item2).ToArray();
+                tableNames = tableList.Where(x => tableNameArray.Contains(x.Item2)).Select(x => x.Item2).ToList();
+            }
+            else
+            {
+                tableNames.Add(tableList.Select(x => x.Item2).ToArray()[int.Parse(tableNo)]);
+            }
+        }
+        if (tableNames.Any())
+        {
+            connectionString = GetConnectionString(dataBase);
             //取得資料表結構清單 
-            var tableSchema = GetTableChema(connectionString, querySchema, tableName);
+            var tableSchemas = GetTableChema(connectionString, tableNames);
             Console.WriteLine($"\n是否產生.cs檔案? 確定請輸入：1");
             string check = Console.ReadLine();
             if (check == "1")
             {
                 //產生.cs檔案 
-                var fileSource = ConvertToClassFileSource(tableSchema);
-                GenerateClass(tableSchema.FirstOrDefault()?.TABLE_NAME, fileSource, filePath);
+                //var fileSource = ConvertToClassFileSource(tableSchema); 
+                //GenerateClass(tableSchema.FirstOrDefault()?.TABLE_NAME, fileSource, filePath); 
+                foreach (var item in tableSchemas)
+                {
+                    GenerateClass(item.Key, item.Value, filePath);
+                }
+
             }
         }
     }
@@ -71,9 +108,10 @@ static List<(string propertyName, string propertyType, string description)> Conv
     return properties;
 }
 //查詢資料庫，資料表 
-static List<(string, string)> DataBaseTableListQuery(string connectionString)
+static List<(string, string)> DataBaseTableListQuery(string dataBase)
 {
     List<(string, string)> results = new List<(string, string)>();
+    string connectionString = GetConnectionString(dataBase);
     string tableListQuery = "select TABLE_CATALOG,Table_name from INFORMATION_SCHEMA.TABLES order by Table_name";
     using (var conn = new SqlConnection(connectionString))
     {
@@ -90,7 +128,7 @@ static List<(string, string)> DataBaseTableListQuery(string connectionString)
 static void GenerateClass(string className, List<(string propertyName, string propertyType, string description)> properties, string filePath)
 {
     string fileName = className + ".cs";
-    string namespaceName = className;
+    string namespaceName = "ProjectName.Modeles";
     string sourcePath = Path.Combine(filePath, fileName);
     using (StreamWriter streamWriter = new StreamWriter(sourcePath))
     {
@@ -140,24 +178,34 @@ string ConvertCSharpFormatToSqlServer(string typeName)
     var index = Array.IndexOf(CSharpTypes(), typeName);
     return index > -1 ? SqlServerTypes()[index] : null;
 }
-static List<INFO_SCHEMA_COLUMNS> GetTableChema(string connectionString, string querySchema, string tableName)
+static Dictionary<string, List<(string propertyName, string propertyType, string description)>> GetTableChema(string connectionString, List<string> tableNames)
 {
-    List<INFO_SCHEMA_COLUMNS> results = new List<INFO_SCHEMA_COLUMNS>();
+    string querySchema = GetTableSchemaString();
+    var dictionary = new Dictionary<string, List<(string propertyName, string propertyType, string description)>>();
     using (var conn = new SqlConnection(connectionString))
     {
-        results = conn.Query<INFO_SCHEMA_COLUMNS>(querySchema, new { table_name = tableName }).ToList();
-        int maxName = results.Max(x => x.COLUMN_NAME?.Length ?? 0);
-        int maxType = results.Where(x => !string.IsNullOrEmpty(x.DATA_TYPE)).Max(x => x.DATA_TYPE?.Length ?? 0);
-        int maxLength = results.Max(x => x.CHARACTER_MAXIMUM_LENGTH?.Length ?? 0);
-        int maxDefalut = results.Max(x => x.COLUMN_DEFAULT?.Length ?? 0);
-        int maxIsNull = results.Max(x => x.IS_NULLABLE?.Length ?? 0);
-        Console.WriteLine($"\n資料庫：{results.FirstOrDefault()?.TABLE_CATALOG} - 資料表：{results.FirstOrDefault()?.TABLE_NAME}\n");
-        foreach (var item in results)
+        foreach (var tableName in tableNames)
         {
-            Console.WriteLine($"欄位：{item.COLUMN_NAME.PadRight(maxName)} - 型態：{item.DATA_TYPE.PadRight(maxType)} - 長度：{item.CHARACTER_MAXIMUM_LENGTH?.PadRight(maxLength) ?? string.Empty.PadRight(maxLength)} - 預設值：{item.COLUMN_DEFAULT?.PadRight(maxDefalut) ?? string.Empty.PadRight(maxDefalut)} - 允許Null：{item.IS_NULLABLE.PadRight(maxIsNull)} - 描述：{item.Description}");
+            List<INFO_SCHEMA_COLUMNS> results = new List<INFO_SCHEMA_COLUMNS>();
+            results = conn.Query<INFO_SCHEMA_COLUMNS>(querySchema, new { table_name = tableName }).ToList();
+            int maxName = results.Max(x => x.COLUMN_NAME?.Length ?? 0);
+            int maxKey = results.Max(x => x.COLUMN_KEY?.Length ?? 0);
+            int maxType = results.Max(x => x.DATA_TYPE?.Length ?? 0);
+            int maxLength = results.Max(x => x.CHARACTER_MAXIMUM_LENGTH?.Length ?? 0);
+            int maxDefalut = results.Max(x => x.COLUMN_DEFAULT?.Length ?? 0);
+            int maxIsNull = results.Max(x => x.IS_NULLABLE?.Length ?? 0);
+            Console.WriteLine($"\n資料庫：{results.FirstOrDefault()?.TABLE_CATALOG} - 資料表：{results.FirstOrDefault()?.TABLE_NAME}\n");
+            foreach (var item in results)
+            {
+                Console.WriteLine($"欄位：{item.COLUMN_NAME.PadRight(maxName)} - 是否為Key：{item.COLUMN_KEY.PadRight(maxKey)} - 型態：{item.DATA_TYPE.PadRight(maxType)} - 長度：{item.CHARACTER_MAXIMUM_LENGTH?.PadRight(maxLength) ?? string.Empty.PadRight(maxLength)} - 預設值：{item.COLUMN_DEFAULT?.PadRight(maxDefalut) ?? string.Empty.PadRight(maxDefalut)} - 允許Null：{item.IS_NULLABLE.PadRight(maxIsNull)} - 描述：{item.Description}\n");
+            }
+            //產生.cs檔案 
+            var fileSource = ConvertToClassFileSource(results);
+            dictionary.Add(results.FirstOrDefault().TABLE_NAME, fileSource);
+            Console.WriteLine("------------------------------------------------------");
         }
     }
-    return results;
+    return dictionary;
 }
 //資料表結構 
 static string GetTableSchemaString()
@@ -165,6 +213,7 @@ static string GetTableSchemaString()
     return @"SELECT 
             a.TABLE_NAME               , 
             b.COLUMN_NAME              , 
+            ISNULL((SELECT CASE WHEN COLUMN_NAME IS NOT NULL AND COLUMN_NAME <> '' THEN 'Yes' ELSE 'No' END　FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_NAME = a.TABLE_NAME and COLUMN_NAME = b.COLUMN_NAME),'NO') as COLUMN_KEY, 
             b.DATA_TYPE                , 
             b.CHARACTER_MAXIMUM_LENGTH , 
             b.COLUMN_DEFAULT           , 
@@ -185,10 +234,29 @@ static string GetTableSchemaString()
                 LEFT JOIN INFORMATION_SCHEMA.COLUMNS b ON (a.TABLE_NAME=b.TABLE_NAME) 
             WHERE a.TABLE_NAME= @table_name ORDER BY a.TABLE_NAME, b.ORDINAL_POSITION";
 }
+static string CheckDataBase(List<(int, string)> results)
+{
+    Console.Write($"\n請輸入目標資料庫編號：");
+    string no = Console.ReadLine();
+    string dataBase = string.Empty;
+    if (int.TryParse(no, out var r))
+    {
+        dataBase = results.FirstOrDefault(x => x.Item1 == r).Item2 ?? string.Empty;        
+    }
+
+    if (string.IsNullOrEmpty(dataBase))
+    {
+        Console.WriteLine("無此資料庫請重新輸入\n");
+        CheckDataBase(results);
+    }
+
+    return dataBase;
+}
 class INFO_SCHEMA_COLUMNS
 {
     public string TABLE_CATALOG { get; set; }
     public string TABLE_NAME { get; set; }
+    public string COLUMN_KEY { get; set; }
     public string COLUMN_NAME { get; set; }
     public string DATA_TYPE { get; set; }
     public string CHARACTER_MAXIMUM_LENGTH { get; set; }
